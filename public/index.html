@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>iFace 990 Plus</title>
+    <link rel="stylesheet" href="/styles.css?v=6" />
+  </head>
+  <body>
+    <header class="top">
+      <div>
+        <p class="kicker">ZKTeco · attendance</p>
+        <h1>iFace 990 Plus</h1>
+      </div>
+      <div class="top-meta">
+        <div class="mode-switch" id="mode-switch">
+          <button type="button" data-mode="sdk" id="mode-sdk">SDK</button>
+          <button type="button" data-mode="adms" id="mode-adms">ADMS</button>
+        </div>
+        <span id="status-pill" class="pill off">Connecting</span>
+        <span id="device-addr" class="addr">192.168.1.76:6</span>
+        <button id="refresh" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <section class="stats" id="stats">
+      <article>
+        <p>People</p>
+        <strong id="stat-users">—</strong>
+      </article>
+      <article>
+        <p>Punches</p>
+        <strong id="stat-logs">—</strong>
+      </article>
+      <article>
+        <p>Capacity</p>
+        <strong id="stat-capacity">—</strong>
+      </article>
+      <article class="last">
+        <p>Last punch</p>
+        <strong id="stat-last">Waiting</strong>
+        <span id="stat-last-sub"></span>
+      </article>
+    </section>
+
+    <p id="adms-hint" class="hint hidden"></p>
+    <p id="banner" class="banner hidden"></p>
+
+    <main class="grid">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>People</h2>
+        </div>
+        <form id="user-form" class="user-form">
+          <input type="hidden" id="user-uid" />
+          <input id="user-userid" name="userId" placeholder="ID" maxlength="9" required />
+          <input id="user-name" name="name" placeholder="Name" maxlength="24" required />
+          <input id="user-password" name="password" placeholder="Password" maxlength="8" />
+          <select id="user-role" name="role">
+            <option value="0">User</option>
+            <option value="14">Admin</option>
+          </select>
+          <input id="user-card" name="card" placeholder="Card no" inputmode="numeric" />
+          <button type="submit" id="user-save">Add person</button>
+          <button type="button" id="user-cancel" class="ghost hidden">Cancel</button>
+        </form>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Role</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="users-body">
+              <tr>
+                <td colspan="4" class="empty">Loading users…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Recent punches</h2>
+          <button id="clear-logs" class="danger" type="button">Clear all logs</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Person</th>
+                <th>ID</th>
+              </tr>
+            </thead>
+            <tbody id="logs-body">
+              <tr>
+                <td colspan="3" class="empty">Loading punches…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <p class="sync" id="sync">Not synced yet</p>
+    <script src="/app.js?v=6"></script>
+  </body>
+</html>
