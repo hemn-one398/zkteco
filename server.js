@@ -61,15 +61,15 @@ app.get('/api/status', (req, res) => {
 app.post('/api/mode', async (req, res) => {
   try {
     const mode = req.body?.mode === 'adms' ? 'adms' : 'sdk'
-    res.json(await hub.setMode(mode))
+    res.json(await hub.setMode(mode, req))
   } catch (err) {
     fail(res, err, 400)
   }
 })
 
-app.post('/api/refresh', async (_req, res) => {
+app.post('/api/refresh', async (req, res) => {
   try {
-    res.json(await hub.refresh())
+    res.json(await hub.refresh(req))
   } catch (err) {
     fail(res, err)
   }
@@ -77,7 +77,7 @@ app.post('/api/refresh', async (_req, res) => {
 
 app.post('/api/users', async (req, res) => {
   try {
-    res.json(await hub.setUser(req.body || {}))
+    res.json(await hub.setUser(req.body || {}, req))
   } catch (err) {
     fail(res, err, 400)
   }
@@ -85,15 +85,15 @@ app.post('/api/users', async (req, res) => {
 
 app.delete('/api/users/:uid', async (req, res) => {
   try {
-    res.json(await hub.deleteUser(req.params.uid))
+    res.json(await hub.deleteUser(req.params.uid, req))
   } catch (err) {
     fail(res, err, 400)
   }
 })
 
-app.post('/api/logs/clear', async (_req, res) => {
+app.post('/api/logs/clear', async (req, res) => {
   try {
-    res.json(await hub.clearLogs())
+    res.json(await hub.clearLogs(req))
   } catch (err) {
     fail(res, err)
   }

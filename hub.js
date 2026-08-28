@@ -50,13 +50,38 @@ function hostnameFromHostHeader(value) {
   const host = String(value || '')
     .split(',')[0]
     .trim()
-    .replace(/^\[|\]$/g, '')
   if (!host) return ''
   if (host.startsWith('[')) {
     const end = host.indexOf(']')
     return end > 0 ? host.slice(1, end) : ''
   }
-  return host.split(':')[0].trim()
+  return host.replace(/^https?:\/\//, '').split('/')[0].split(':')[0].trim()
+}
+
+function envPublicHost() {
+  for (const value of [
+    process.env.ZK_ADMS_HOST,
+    process.env.VERCEL_PROJECT_PRODUCTION_URL,
+    process.env.VERCEL_URL,
+  ]) {
+    const host = hostnameFromHostHeader(value)
+    if (host && !isUnreachableHost(host)) return host
+  }
+  return ''
+}
+
+function requestHost(req) {
+  if (!req?.headers) return ''
+  return hostnameFromHostHeader(
+    req.headers['x-forwarded-host'] || req.headers['x-vercel-forwarded-host'] || req.headers.host,
+  )
+}
+
+function requestProto(req, host) {
+  const forwarded = String(req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim()
+  if (forwarded === 'https' || forwarded === 'http') return forwarded
+  if (process.env.VERCEL || /\.vercel\.app$/i.test(host)) return 'https'
+  return 'http'
 }
 
 class Hub extends EventEmitter {
@@ -67,6 +92,7 @@ class Hub extends EventEmitter {
     this.port = config.httpPort
     this.sdk = new Device(config)
     this.adms = new AdmsDevice()
+    this.lastAdmsHost = ''
     this.bind(this.sdk)
     this.bind(this.adms)
   }
@@ -84,28 +110,52 @@ class Hub extends EventEmitter {
     return this.mode === 'adms' ? this.adms : this.sdk
   }
 
+  resolveAdms(req) {
+    const configured = hostnameFromHostHeader(this.config.admsHost)
+    const fromReq = requestHost(req)
+    if (fromReq && !isUnreachableHost(fromReq)) this.lastAdmsHost = fromReq
+
+    const host =
+      (configured && !isUnreachableHost(configured) && configured) ||
+      this.lastAdmsHost ||
+      (fromReq && !isUnreachableHost(fromReq) && fromReq) ||
+      envPublicHost() ||
+      lanIPv4() ||
+      '127.0.0.1'
+
+    const https = requestProto(req, host) === 'https'
+    const domainName = !isIPv4(host)
+    const port = Number(process.env.ZK_ADMS_PORT) || (https ? 443 : domainName ? 80 : this.port)
+    const origin = https
+      ? `https://${host}${port === 443 ? '' : `:${port}`}`
+      : `http://${host}${port === 80 ? '' : `:${port}`}`
+
+    return {
+      host,
+      port,
+      https,
+      domainName,
+      url: `${origin}/iclock/`,
+    }
+  }
+
   resolveAdmsHost(req) {
-    const fromEnv = String(this.config.admsHost || process.env.ZK_ADMS_HOST || '').trim()
-    if (fromEnv) return fromEnv
-
-    const header = req && (req.headers['x-forwarded-host'] || req.headers.host)
-    const fromReq = hostnameFromHostHeader(header)
-    if (fromReq && !isUnreachableHost(fromReq)) return fromReq
-
-    return lanIPv4() || '127.0.0.1'
+    return this.resolveAdms(req).host
   }
 
   admsUrl(req) {
-    return `http://${this.resolveAdmsHost(req)}:${this.port}/iclock/`
+    return this.resolveAdms(req).url
   }
 
   getState(req) {
-    const admsHost = this.resolveAdmsHost(req)
+    const adms = this.resolveAdms(req)
     return {
       mode: this.mode,
-      admsHost,
-      admsPort: this.port,
-      admsUrl: `http://${admsHost}:${this.port}/iclock/`,
+      admsHost: adms.host,
+      admsPort: adms.port,
+      admsHttps: adms.https,
+      admsDomainName: adms.domainName,
+      admsUrl: adms.url,
       ...this.active.getState(),
     }
   }
@@ -118,9 +168,9 @@ class Hub extends EventEmitter {
     }
   }
 
-  async setMode(mode) {
+  async setMode(mode, req) {
     const next = mode === 'adms' ? 'adms' : 'sdk'
-    if (next === this.mode) return this.getState()
+    if (next === this.mode) return this.getState(req)
     if (this.mode === 'sdk') {
       try {
         await this.sdk.disconnect()
@@ -134,24 +184,29 @@ class Hub extends EventEmitter {
     } else {
       await this.adms.start()
     }
-    this.emit('status', this.getState())
-    return this.getState()
+    const state = this.getState(req)
+    this.emit('status', state)
+    return state
   }
 
-  refresh() {
-    return this.active.refresh()
+  async refresh(req) {
+    await this.active.refresh()
+    return this.getState(req)
   }
 
-  setUser(input) {
-    return this.active.setUser(input)
+  async setUser(input, req) {
+    await this.active.setUser(input)
+    return this.getState(req)
   }
 
-  deleteUser(uid) {
-    return this.active.deleteUser(uid)
+  async deleteUser(uid, req) {
+    await this.active.deleteUser(uid)
+    return this.getState(req)
   }
 
-  clearLogs() {
-    return this.active.clearLogs()
+  async clearLogs(req) {
+    await this.active.clearLogs()
+    return this.getState(req)
   }
 }
 

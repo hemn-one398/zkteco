@@ -41,8 +41,10 @@ function render(state) {
   if (mode === 'adms') {
     hint.classList.remove('hidden')
     const host = state.admsHost || ''
-    const port = state.admsPort || 3005
-    hint.textContent = `On the device: Comm → Cloud Server Setting. Server Address = ${host}  ·  Server Port = ${port}  ·  Domain Name OFF, HTTPS OFF. Do not use 169.254.x.x. Add/delete/clear wait for the next device poll.`
+    const port = state.admsPort || (state.admsHttps ? 443 : 80)
+    const domain = state.admsDomainName ? 'ON' : 'OFF'
+    const https = state.admsHttps ? 'ON' : 'OFF'
+    hint.textContent = `On the device: Comm → Cloud Server Setting. Enable Domain Name = ${domain}  ·  Server Address = ${host}  ·  Server Port = ${port}  ·  HTTPS = ${https}. Add/delete/clear wait for the next device poll.`
     $('device-addr').textContent = device.serial
       ? `${device.serial}${device.ip ? ' · ' + device.ip : ''}`
       : 'Waiting for device…'
