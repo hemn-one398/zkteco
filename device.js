@@ -133,15 +133,21 @@ class Device extends EventEmitter {
   }
 
   async disconnect() {
-    if (!this.zk) return
-    try {
-      await this.zk.disconnect()
-    } catch {
-      // already closed
-    }
+    const zk = this.zk
     this.zk = null
     this.connected = false
     this.realtimeStarted = false
+    if (!zk) return
+    try {
+      await Promise.race([zk.disconnect(), delay(1500)])
+    } catch {
+      // node-zklib throws if the socket is already gone
+    }
+    try {
+      zk.zklibTcp?.socket?.destroy?.()
+    } catch {
+      // ignore
+    }
   }
 
   async loadSnapshot({ skipLogs = false } = {}) {
