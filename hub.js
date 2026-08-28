@@ -3,15 +3,60 @@ const os = require('os')
 const { Device } = require('./device')
 const { AdmsDevice } = require('./adms-device')
 
+const SKIP_IFACE = /^(lo|awdl|llw|bridge|utun|tun|tap|veth|docker|br-|cni|flannel|virbr|vboxnet|vmnet|vnic)/i
+
+function isIPv4(address) {
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(address)
+}
+
+function isUsableIPv4(address) {
+  if (!isIPv4(address)) return false
+  if (address === '0.0.0.0') return false
+  if (address.startsWith('127.')) return false
+  if (address.startsWith('169.254.')) return false
+  return true
+}
+
+function isUnreachableHost(host) {
+  const value = String(host || '').toLowerCase()
+  return !value || value === 'localhost' || value === '::1' || value.startsWith('127.') || value.startsWith('169.254.')
+}
+
+function scoreAddress(name, address) {
+  let score = 0
+  if (/^(en|eth|wlan|wl|wifi)/i.test(name)) score += 40
+  if (address.startsWith('192.168.')) score += 30
+  if (address.startsWith('10.')) score += 20
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(address)) score += 20
+  return score
+}
+
 function lanIPv4() {
   const nets = os.networkInterfaces()
-  for (const addrs of Object.values(nets)) {
+  const candidates = []
+  for (const [name, addrs] of Object.entries(nets)) {
+    if (SKIP_IFACE.test(name)) continue
     for (const item of addrs || []) {
       const family = item.family === 4 || item.family === 'IPv4'
-      if (family && !item.internal) return item.address
+      if (!family || item.internal || !isUsableIPv4(item.address)) continue
+      candidates.push({ name, address: item.address, score: scoreAddress(name, item.address) })
     }
   }
-  return '127.0.0.1'
+  candidates.sort((a, b) => b.score - a.score)
+  return candidates[0]?.address || ''
+}
+
+function hostnameFromHostHeader(value) {
+  const host = String(value || '')
+    .split(',')[0]
+    .trim()
+    .replace(/^\[|\]$/g, '')
+  if (!host) return ''
+  if (host.startsWith('[')) {
+    const end = host.indexOf(']')
+    return end > 0 ? host.slice(1, end) : ''
+  }
+  return host.split(':')[0].trim()
 }
 
 class Hub extends EventEmitter {
@@ -39,14 +84,28 @@ class Hub extends EventEmitter {
     return this.mode === 'adms' ? this.adms : this.sdk
   }
 
-  admsUrl() {
-    return `http://${lanIPv4()}:${this.port}/iclock/`
+  resolveAdmsHost(req) {
+    const fromEnv = String(this.config.admsHost || process.env.ZK_ADMS_HOST || '').trim()
+    if (fromEnv) return fromEnv
+
+    const header = req && (req.headers['x-forwarded-host'] || req.headers.host)
+    const fromReq = hostnameFromHostHeader(header)
+    if (fromReq && !isUnreachableHost(fromReq)) return fromReq
+
+    return lanIPv4() || '127.0.0.1'
   }
 
-  getState() {
+  admsUrl(req) {
+    return `http://${this.resolveAdmsHost(req)}:${this.port}/iclock/`
+  }
+
+  getState(req) {
+    const admsHost = this.resolveAdmsHost(req)
     return {
       mode: this.mode,
-      admsUrl: this.admsUrl(),
+      admsHost,
+      admsPort: this.port,
+      admsUrl: `http://${admsHost}:${this.port}/iclock/`,
       ...this.active.getState(),
     }
   }

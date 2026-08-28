@@ -7,6 +7,7 @@ const PORT = Number(process.env.PORT || 3005)
 const hub = new Hub({
   mode: process.env.ZK_MODE || 'sdk',
   httpPort: PORT,
+  admsHost: process.env.ZK_ADMS_HOST || '',
   ip: process.env.ZK_IP || '192.168.1.76',
   port: Number(process.env.ZK_PORT || 6),
   timeoutMs: Number(process.env.ZK_TIMEOUT || 10000),
@@ -27,7 +28,7 @@ hub.on('status', (state) => broadcast('status', state))
 
 function fail(res, err, status = 503) {
   res.status(status).json({
-    ...hub.getState(),
+    ...hub.getState(res.req),
     error: err?.err?.message || err.message || String(err),
   })
 }
@@ -53,8 +54,8 @@ app.use('/iclock', hub.adms.router)
 app.use(express.json())
 app.use(express.static(path.join(__dirname, 'public')))
 
-app.get('/api/status', (_req, res) => {
-  res.json(hub.getState())
+app.get('/api/status', (req, res) => {
+  res.json(hub.getState(req))
 })
 
 app.post('/api/mode', async (req, res) => {
@@ -103,7 +104,7 @@ app.get('/api/events', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
   res.flushHeaders?.()
-  res.write(`event: status\ndata: ${JSON.stringify(hub.getState())}\n\n`)
+  res.write(`event: status\ndata: ${JSON.stringify(hub.getState(req))}\n\n`)
   clients.add(res)
   req.on('close', () => clients.delete(res))
 })
