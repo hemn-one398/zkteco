@@ -38,18 +38,63 @@ function parseKv(data, sep, transformKey) {
   return info
 }
 
+function normalizeId(value) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return ''
+  const stripped = raw.replace(/^0+/, '')
+  return stripped || '0'
+}
+
+function sameId(a, b) {
+  const left = String(a ?? '').trim()
+  const right = String(b ?? '').trim()
+  if (!left || !right) return false
+  if (left === right) return true
+  return normalizeId(left) === normalizeId(right)
+}
+
+function userNameFromFields(fields, pin) {
+  const name = String(
+    fields.Name ||
+      fields.name ||
+      fields.EName ||
+      fields.ename ||
+      fields.AccName ||
+      fields.UserName ||
+      fields.username ||
+      '',
+  ).trim()
+  return name || `User ${pin}`
+}
+
 function parseAttendance(body, serial) {
   const records = []
   for (const raw of String(body || '').split('\n')) {
     const line = raw.replace(/\r$/, '').trim()
     if (!line) continue
+    const keyed = parseKv(line.replace(/\t/g, '\n'), '\n')
+    if (keyed.PIN || keyed.pin) {
+      const userId = String(keyed.PIN || keyed.pin).trim()
+      const time = parseDeviceTime(keyed.TIME || keyed.Time || keyed.time)
+      if (!userId || !time || Number.isNaN(time.getTime())) continue
+      records.push({
+        userId,
+        time: time.toISOString(),
+        status: Number(keyed.STATUS || keyed.Status || 0) || 0,
+        verifyMode: Number(keyed.VERIFY || keyed.Verify || 0) || 0,
+        workCode: keyed.WORKCODE || keyed.WorkCode || '',
+        serialNumber: serial,
+      })
+      continue
+    }
     let parts = line.split('\t')
     if (parts.length < 2) {
       const match = line.match(/^(\S+)\s+(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})(?:\s+(\S+))?(?:\s+(\S+))?(?:\s+(\S+))?/)
       if (!match) continue
       parts = [match[1], match[2], match[3], match[4], match[5]]
     }
-    const userId = String(parts[0] || '').trim()
+    let userId = String(parts[0] || '').trim()
+    if (userId.toUpperCase().startsWith('PIN=')) userId = userId.slice(4).trim()
     const time = parseDeviceTime(parts[1])
     if (!userId || !time || Number.isNaN(time.getTime())) continue
     records.push({
@@ -70,14 +115,22 @@ function parseUsers(body) {
     const line = raw.replace(/\r$/, '').trim()
     if (!line) continue
     const fields = parseKv(line.replace(/\t/g, '\n'), '\n')
-    const pin = fields.PIN || fields.pin
+    let pin = fields.PIN || fields.pin
+    let name = pin ? userNameFromFields(fields, pin) : ''
+    if (!pin) {
+      const parts = line.split(/\t+/)
+      if (parts.length >= 2 && !parts[0].includes('=')) {
+        pin = parts[0].trim()
+        name = String(parts[1] || '').trim() || `User ${pin}`
+      }
+    }
     if (!pin) continue
     users.push({
       pin,
-      name: fields.Name || fields.name || `User ${pin}`,
-      privilege: Number(fields.Privilege || fields.privilege || 0) || 0,
+      name,
+      privilege: Number(fields.Privilege || fields.privilege || fields.Pri || fields.pri || 0) || 0,
       card: fields.Card || fields.card || '',
-      password: fields.Password || fields.password || '',
+      password: fields.Password || fields.password || fields.Passwd || '',
     })
   }
   return users
@@ -394,4 +447,4 @@ class AdmsServer {
   }
 }
 
-module.exports = { AdmsServer }
+module.exports = { AdmsServer, sameId, normalizeId }

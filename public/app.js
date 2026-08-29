@@ -14,15 +14,24 @@ function roleLabel(role) {
   return Number(role) === 14 ? 'Admin' : 'User'
 }
 
+function sameId(a, b) {
+  const left = String(a ?? '').trim()
+  const right = String(b ?? '').trim()
+  if (!left || !right) return false
+  if (left === right) return true
+  const strip = (value) => value.replace(/^0+/, '') || '0'
+  return strip(left) === strip(right)
+}
+
 function personName(log, users) {
   const id = String(log?.userId ?? '').trim()
   const user = (users || []).find(
-    (item) => String(item.userId) === id || String(item.uid) === id,
+    (item) => sameId(item.userId, id) || sameId(item.uid, id),
   )
   const fromUser = String(user?.name || '').trim()
-  if (fromUser && !/^User\s+/i.test(fromUser)) return fromUser
+  if (fromUser && !/^user\s+/i.test(fromUser)) return fromUser
   const fromLog = String(log?.name || '').trim()
-  if (fromLog && !/^User\s+/i.test(fromLog)) return fromLog
+  if (fromLog && !/^user\s+/i.test(fromLog)) return fromLog
   return fromUser || fromLog || id || '—'
 }
 

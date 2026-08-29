@@ -1,5 +1,5 @@
 const { EventEmitter } = require('events')
-const { AdmsServer } = require('./adms')
+const { AdmsServer, sameId } = require('./adms')
 const { loadState, saveState, persistBackend } = require('./store')
 
 function punchKey(userId, time) {
@@ -59,31 +59,48 @@ class AdmsDevice extends EventEmitter {
     this.options = data.options || {}
     this.lastSync = data.lastSync || null
     this.error = data.error || null
+    this.logs = this.withNames(this.logs)
   }
 
   async persist() {
+    const current = (await loadState()) || {}
+    const users = this.users.length ? this.users : current.users || []
+    const logs = this.withNames(this.logs.length ? this.logs : current.logs || [])
     await saveState({
       server: this.server.snapshot(),
-      users: this.users,
-      logs: this.logs,
+      users,
+      logs,
       seen: [...this.seen],
       info: this.info,
-      serial: this.serial,
+      serial: this.serial || current.serial,
       options: this.options,
       lastSync: this.lastSync,
       error: this.error,
     })
   }
 
+  findUser(userId) {
+    const id = String(userId ?? '').trim()
+    if (!id) return null
+    return this.users.find(
+      (item) => sameId(item.userId, id) || sameId(item.uid, id),
+    )
+  }
+
+  isPlaceholderName(name, userId) {
+    const text = String(name || '').trim()
+    if (!text) return true
+    const id = String(userId ?? '').trim()
+    return /^user\s+/i.test(text) && (!id || text.replace(/^user\s+/i, '') === id)
+  }
+
   nameFor(userId) {
     const id = String(userId ?? '').trim()
     if (!id) return ''
-    const user = this.users.find(
-      (item) => String(item.userId) === id || String(item.uid) === id,
-    )
+    const user = this.findUser(id)
     const name = String(user?.name || '').trim()
-    if (name && !/^User\s+/i.test(name)) return name
-    return name || `User ${id}`
+    if (name && !this.isPlaceholderName(name, user?.userId || id)) return name
+    return `User ${id}`
   }
 
   withNames(logs) {
@@ -108,13 +125,27 @@ class AdmsDevice extends EventEmitter {
   }
 
   ingestUsers(users) {
-    this.users = users.map((user) => ({
-      uid: Number(user.pin) || user.pin,
-      userId: String(user.pin),
-      name: (user.name || '').trim() || `User ${user.pin}`,
-      role: Number(user.privilege) === 14 ? 14 : 0,
-      card: user.card || '',
-    }))
+    for (const user of users || []) {
+      const pin = String(user.pin || '').trim()
+      if (!pin) continue
+      const incomingName = String(user.name || '').trim()
+      const row = {
+        uid: Number(pin) || pin,
+        userId: pin,
+        name: incomingName || `User ${pin}`,
+        role: Number(user.privilege) === 14 ? 14 : 0,
+        card: user.card || '',
+      }
+      const existing = this.findUser(pin)
+      if (existing) {
+        if (this.isPlaceholderName(row.name, pin) && !this.isPlaceholderName(existing.name, existing.userId)) {
+          row.name = existing.name
+        }
+        Object.assign(existing, row)
+      } else {
+        this.users.push(row)
+      }
+    }
     this.info.userCounts = this.users.length
     this.lastSync = new Date().toISOString()
     this.error = null
@@ -123,13 +154,16 @@ class AdmsDevice extends EventEmitter {
   }
 
   ingestAttendance(records) {
+    let needUsers = false
     for (const record of records) {
       const key = punchKey(record.userId, record.time)
       if (this.seen.has(key)) continue
       this.seen.add(key)
+      const name = this.nameFor(record.userId)
+      if (this.isPlaceholderName(name, record.userId)) needUsers = true
       const punch = {
         userId: String(record.userId),
-        name: this.nameFor(record.userId),
+        name,
         time: record.time,
         live: true,
       }
@@ -137,6 +171,7 @@ class AdmsDevice extends EventEmitter {
       this.info.logCounts = Math.max(this.info.logCounts, this.logs.length)
       this.emit('punch', punch)
     }
+    if (needUsers && this.serial) this.server.sendQueryUsers(this.serial)
     this.lastSync = new Date().toISOString()
     this.error = null
     this.emit('status', this.getState())
