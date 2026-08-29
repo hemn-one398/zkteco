@@ -3,6 +3,20 @@ const path = require('path')
 const { Redis } = require('@upstash/redis')
 
 const KEY = 'zkteco:adms:v1'
+const CMD_SEQ = 'zkteco:adms:seq'
+
+function cmdKey(sn) {
+  return `zkteco:adms:q:${String(sn || '').trim()}`
+}
+
+function parseQueued(raw) {
+  if (raw == null || raw === '') return null
+  const value = typeof raw === 'string' ? JSON.parse(raw) : raw
+  const command = String(value?.command || '').trim()
+  const id = Number(value?.id)
+  if (!command || !Number.isFinite(id)) return null
+  return { id, command }
+}
 
 function loadEnvFile(file) {
   const full = path.join(__dirname, file)
@@ -76,4 +90,58 @@ async function saveState(value) {
   return persistBackend()
 }
 
-module.exports = { loadState, saveState, persistBackend }
+async function enqueueCommand(sn, command) {
+  const redis = getRedis()
+  if (!redis || !sn) return null
+  try {
+    const id = Number(await redis.incr(CMD_SEQ))
+    await redis.rpush(cmdKey(sn), JSON.stringify({ id, command }))
+    return id
+  } catch (err) {
+    console.error('adms enqueue failed:', err.message || err)
+    return null
+  }
+}
+
+async function drainCommandQueue(sn) {
+  const redis = getRedis()
+  if (!redis || !sn) return null
+  const key = cmdKey(sn)
+  try {
+    const items = []
+    for (;;) {
+      const raw = await redis.lpop(key)
+      if (raw == null) break
+      try {
+        const item = parseQueued(raw)
+        if (item) items.push(item)
+      } catch (err) {
+        console.error('adms command parse failed:', err.message || err)
+      }
+    }
+    return items
+  } catch (err) {
+    console.error('adms drain failed:', err.message || err)
+    return []
+  }
+}
+
+async function commandQueueLength(sn) {
+  const redis = getRedis()
+  if (!redis || !sn) return null
+  try {
+    return Number(await redis.llen(cmdKey(sn))) || 0
+  } catch (err) {
+    console.error('adms queue length failed:', err.message || err)
+    return 0
+  }
+}
+
+module.exports = {
+  loadState,
+  saveState,
+  persistBackend,
+  enqueueCommand,
+  drainCommandQueue,
+  commandQueueLength,
+}

@@ -6,6 +6,38 @@ function punchKey(userId, time) {
   return `${userId}|${time}`
 }
 
+function newerIclock(a, b) {
+  const left = Date.parse(a?.at || 0) || 0
+  const right = Date.parse(b?.at || 0) || 0
+  if (right > left) return b || null
+  return a || b || null
+}
+
+function mergeUsers(base, incoming) {
+  const map = new Map()
+  for (const list of [base, incoming]) {
+    for (const user of list || []) {
+      const id = String(user?.userId || user?.uid || '').trim()
+      if (!id) continue
+      const prev = map.get(id)
+      if (!prev) {
+        map.set(id, { ...user, userId: id })
+        continue
+      }
+      const nextName = String(user.name || '').trim()
+      const prevName = String(prev.name || '').trim()
+      const placeholder = /^user\s+/i.test(nextName)
+      map.set(id, {
+        ...prev,
+        ...user,
+        userId: id,
+        name: placeholder && prevName && !/^user\s+/i.test(prevName) ? prevName : nextName || prevName,
+      })
+    }
+  }
+  return [...map.values()]
+}
+
 class AdmsDevice extends EventEmitter {
   constructor() {
     super()
@@ -26,12 +58,12 @@ class AdmsDevice extends EventEmitter {
         this.serial = sn
         this.emit('status', this.getState())
       },
-      onFirstSeen: (sn) => {
+      onFirstSeen: async (sn) => {
         this.serial = sn
-        this.server.sendQueryUsers(sn)
-        this.server.sendInfo(sn)
+        await this.server.sendQueryUsers(sn)
+        await this.server.sendInfo(sn)
         for (const key of ['DeviceName', 'IPAddress', 'UserCount', 'AttLogCount', 'MaxAttLogCount']) {
-          this.server.sendGetOption(sn, key)
+          await this.server.sendGetOption(sn, key)
         }
       },
       onCommandResult: (result) => {
@@ -51,6 +83,7 @@ class AdmsDevice extends EventEmitter {
     const data = await loadState()
     if (!data) return
     this.server.restore(data.server || {})
+    this.server.lastIclock = newerIclock(this.server.lastIclock, data.lastIclock)
     this.users = data.users || []
     this.logs = data.logs || []
     this.seen = new Set(data.seen || [])
@@ -60,22 +93,30 @@ class AdmsDevice extends EventEmitter {
     this.lastSync = data.lastSync || null
     this.error = data.error || null
     this.logs = this.withNames(this.logs)
+    const sn = this.serial || this.server.primarySn()
+    if (sn) await this.server.refreshCommandCount(sn)
   }
 
   async persist() {
     const current = (await loadState()) || {}
-    const users = this.users.length ? this.users : current.users || []
+    const users = mergeUsers(current.users, this.users)
     const logs = this.withNames(this.logs.length ? this.logs : current.logs || [])
+    const lastIclock = newerIclock(this.server.lastIclock, current.server?.lastIclock || current.lastIclock)
     await saveState({
-      server: this.server.snapshot(),
+      server: { ...this.server.snapshot(), lastIclock },
       users,
       logs,
       seen: [...this.seen],
-      info: this.info,
+      info: {
+        userCounts: users.length || this.info.userCounts || current.info?.userCounts || 0,
+        logCounts: Math.max(this.info.logCounts || 0, current.info?.logCounts || 0, logs.length),
+        logCapacity: this.info.logCapacity || current.info?.logCapacity || 0,
+      },
       serial: this.serial || current.serial,
-      options: this.options,
-      lastSync: this.lastSync,
+      options: { ...(current.options || {}), ...this.options },
+      lastSync: this.lastSync || current.lastSync,
       error: this.error,
+      lastIclock,
     })
   }
 
@@ -153,7 +194,7 @@ class AdmsDevice extends EventEmitter {
     this.emit('status', this.getState())
   }
 
-  ingestAttendance(records) {
+  async ingestAttendance(records) {
     let needUsers = false
     for (const record of records) {
       const key = punchKey(record.userId, record.time)
@@ -171,7 +212,7 @@ class AdmsDevice extends EventEmitter {
       this.info.logCounts = Math.max(this.info.logCounts, this.logs.length)
       this.emit('punch', punch)
     }
-    if (needUsers && this.serial) this.server.sendQueryUsers(this.serial)
+    if (needUsers && this.serial) await this.server.sendQueryUsers(this.serial)
     this.lastSync = new Date().toISOString()
     this.error = null
     this.emit('status', this.getState())
@@ -200,6 +241,7 @@ class AdmsDevice extends EventEmitter {
       users: this.users,
       logs: this.withNames(this.logs),
       admsDevices: listed,
+      lastIclock: this.server.lastIclock || null,
       pendingCommands: sn ? this.server.pendingCount(sn) : 0,
       persist: persistBackend(),
     }
@@ -222,12 +264,13 @@ class AdmsDevice extends EventEmitter {
 
   async refresh() {
     const sn = this.requireSn()
-    this.server.sendQueryUsers(sn)
-    this.server.sendInfo(sn)
-    this.server.sendCheck(sn)
+    await this.server.sendQueryUsers(sn)
+    await this.server.sendInfo(sn)
+    await this.server.sendCheck(sn)
     for (const key of ['DeviceName', 'IPAddress', 'UserCount', 'AttLogCount', 'MaxAttLogCount']) {
-      this.server.sendGetOption(sn, key)
+      await this.server.sendGetOption(sn, key)
     }
+    await this.server.refreshCommandCount(sn)
     this.lastSync = new Date().toISOString()
     this.error = null
     this.emit('status', this.getState())
@@ -236,7 +279,8 @@ class AdmsDevice extends EventEmitter {
 
   async fetchUsers() {
     const sn = this.requireSn()
-    this.server.sendQueryUsers(sn)
+    await this.server.sendQueryUsers(sn)
+    await this.server.refreshCommandCount(sn)
     this.lastSync = new Date().toISOString()
     this.error = null
     this.emit('status', this.getState())
@@ -249,7 +293,7 @@ class AdmsDevice extends EventEmitter {
     if (!name) throw new Error('Name is required')
     const pin = String(input.userId || input.uid || '').trim()
     if (!pin) throw new Error('User ID is required')
-    this.server.sendUserAdd(sn, {
+    await this.server.sendUserAdd(sn, {
       pin,
       name,
       privilege: Number(input.role) === 14 ? 14 : 0,
@@ -279,7 +323,7 @@ class AdmsDevice extends EventEmitter {
     )
     const pin = match?.userId || raw
     if (!pin) throw new Error('uid is required')
-    this.server.sendUserDelete(sn, pin)
+    await this.server.sendUserDelete(sn, pin)
     this.users = this.users.filter((user) => user.userId !== pin && String(user.uid) !== raw)
     this.info.userCounts = this.users.length
     this.emit('status', this.getState())
@@ -288,7 +332,7 @@ class AdmsDevice extends EventEmitter {
 
   async clearLogs() {
     const sn = this.requireSn()
-    this.server.sendClearData(sn)
+    await this.server.sendClearData(sn)
     this.logs = []
     this.seen = new Set()
     this.info.logCounts = 0

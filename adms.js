@@ -4,6 +4,7 @@
  */
 
 const express = require('express')
+const { enqueueCommand, drainCommandQueue, commandQueueLength, persistBackend } = require('./store')
 
 const SN_RE = /^[A-Za-z0-9_-]{1,64}$/
 
@@ -113,12 +114,13 @@ function parseUsers(body) {
   const users = []
   for (const raw of String(body || '').split('\n')) {
     const line = raw.replace(/\r$/, '').trim()
-    if (!line) continue
-    const fields = parseKv(line.replace(/\t/g, '\n'), '\n')
-    let pin = fields.PIN || fields.pin
+    if (!line || /^OPLOG\b/i.test(line) || /^FP\b/i.test(line)) continue
+    const normalized = line.replace(/^USER\s+/i, '')
+    const fields = parseKv(normalized.replace(/\t/g, '\n'), '\n')
+    let pin = fields.PIN || fields.pin || fields.UID || fields.uid
     let name = pin ? userNameFromFields(fields, pin) : ''
     if (!pin) {
-      const parts = line.split(/\t+/)
+      const parts = normalized.split(/\t+/)
       if (parts.length >= 2 && !parts[0].includes('=')) {
         pin = parts[0].trim()
         name = String(parts[1] || '').trim() || `User ${pin}`
@@ -171,6 +173,8 @@ class AdmsServer {
     this.queues = new Map()
     this.pending = new Map()
     this.nextId = 1
+    this.commandQueueLen = 0
+    this.lastIclock = null
     this.onlineMs = 2 * 60 * 1000
     this.router = this.createRouter()
   }
@@ -191,12 +195,12 @@ class AdmsServer {
       next()
     })
     router.all('/', (_req, res) => this.sendPlain(res, 'OK'))
-    router.all('/cdata', (req, res) => this.handleCData(req, res))
-    router.all('/getrequest', (req, res) => this.handleGetRequest(req, res))
-    router.all('/devicecmd', (req, res) => this.handleDeviceCmd(req, res))
-    router.all('/registry', (req, res) => this.handleRegistry(req, res))
+    router.all('/cdata', (req, res, next) => this.handleCData(req, res).catch(next))
+    router.all('/getrequest', (req, res, next) => this.handleGetRequest(req, res).catch(next))
+    router.all('/devicecmd', (req, res, next) => this.handleDeviceCmd(req, res).catch(next))
+    router.all('/registry', (req, res, next) => this.handleRegistry(req, res).catch(next))
     router.get('/inspect', (req, res) => this.handleInspect(req, res))
-    router.use((_req, res) => res.status(404).send('Not found'))
+    router.use((req, res, next) => this.handleUnknown(req, res).catch(next))
     return router
   }
 
@@ -214,17 +218,31 @@ class AdmsServer {
       res.status(400).send(sn ? 'Invalid SN parameter' : 'Missing SN parameter')
       return null
     }
-    this.touch(sn)
     return sn
   }
 
-  touch(sn) {
+  noteRequest(req) {
+    const body = this.body(req)
+    this.lastIclock = {
+      method: req.method,
+      path: req.path,
+      table: String(req.query.table || ''),
+      bytes: Buffer.byteLength(String(body || '')),
+      preview: String(body || '')
+        .slice(0, 180)
+        .replace(/Password=[^\t\n]*/gi, 'Password=*')
+        .replace(/\t/g, ' | '),
+      at: new Date().toISOString(),
+    }
+  }
+
+  async touch(sn) {
     const isNew = !this.devices.has(sn)
     const prev = this.devices.get(sn) || { serialNumber: sn, options: {}, lastActivity: null }
     prev.lastActivity = new Date()
     this.devices.set(sn, prev)
     this.hooks.onTouch?.(sn, prev)
-    if (isNew) this.hooks.onFirstSeen?.(sn)
+    if (isNew) await this.hooks.onFirstSeen?.(sn)
   }
 
   snapshot() {
@@ -240,6 +258,8 @@ class AdmsServer {
       queues: [...this.queues.entries()],
       pending: [...this.pending.entries()],
       nextId: this.nextId,
+      lastIclock: this.lastIclock,
+      commandQueueLen: this.commandQueueLen,
     }
   }
 
@@ -254,18 +274,22 @@ class AdmsServer {
         },
       ]),
     )
-    this.queues = new Map(data.queues || [])
+    this.queues = persistBackend() === 'redis' ? new Map() : new Map(data.queues || [])
     this.pending = new Map((data.pending || []).map(([id, command]) => [Number(id) || id, command]))
     this.nextId = Number(data.nextId) || 1
+    this.lastIclock = data.lastIclock || this.lastIclock
+    this.commandQueueLen = Number(data.commandQueueLen) || 0
   }
 
   pendingCount(sn) {
     const queued = (this.queues.get(sn) || []).length
-    let pending = 0
-    for (const command of this.pending.values()) {
-      if (command) pending += 1
-    }
-    return queued + pending
+    return queued + (Number(this.commandQueueLen) || 0)
+  }
+
+  async refreshCommandCount(sn) {
+    const n = await commandQueueLength(sn)
+    if (n != null) this.commandQueueLen = n
+    return this.pendingCount(sn)
   }
 
   isOnline(sn) {
@@ -292,10 +316,15 @@ class AdmsServer {
     return last?.serialNumber || null
   }
 
-  queueCommand(sn, command) {
+  async queueCommand(sn, command) {
     if (!sn) throw new Error('No ADMS device has connected yet')
-    if (!this.devices.has(sn)) this.touch(sn)
+    if (!this.devices.has(sn)) await this.touch(sn)
     if (/\r|\n/.test(command)) throw new Error('Invalid command')
+    const redisId = await enqueueCommand(sn, command)
+    if (redisId != null) {
+      this.commandQueueLen = (Number(this.commandQueueLen) || 0) + 1
+      return redisId
+    }
     const id = this.nextId++
     const list = this.queues.get(sn) || []
     list.push({ id, command })
@@ -303,19 +332,23 @@ class AdmsServer {
     return id
   }
 
-  drainCommands(sn) {
-    const list = this.queues.get(sn) || []
+  async drainCommands(sn) {
+    const memory = this.queues.get(sn) || []
     this.queues.delete(sn)
+    const redis = await drainCommandQueue(sn)
+    const list = [...memory, ...(redis || [])]
+    this.commandQueueLen = 0
     for (const item of list) this.pending.set(item.id, item.command)
     return list
   }
 
-  writeCommandsOrOk(res, sn) {
-    const commands = this.drainCommands(sn)
+  async writeCommandsOrOk(res, sn) {
+    const commands = await this.drainCommands(sn)
     if (!commands.length) {
       this.sendPlain(res, 'OK')
       return
     }
+    console.log(`[ADMS] send ${commands.length} command(s) to ${sn}`)
     this.sendPlain(res, commands.map((item) => `C:${item.id}:${item.command}\n`).join(''))
   }
 
@@ -325,62 +358,76 @@ class AdmsServer {
     return ''
   }
 
-  handleCData(req, res) {
+  async handleCData(req, res) {
     if (req.method !== 'GET' && req.method !== 'POST') {
       res.status(405).send('Method not allowed')
       return
     }
     const sn = this.requireSn(req, res)
     if (!sn) return
-    const table = String(req.query.table || '')
+    await this.touch(sn)
+    this.noteRequest(req)
+    const table = String(req.query.table || '').trim().toUpperCase()
     const body = this.body(req)
 
     if (table === 'ATTLOG') {
       const records = parseAttendance(body, sn)
-      this.hooks.onAttendance?.(records)
+      await this.hooks.onAttendance?.(records)
       this.sendPlain(res, `OK: ${records.length}`)
       return
     }
 
-    if (table === 'OPERLOG' || table === 'BIODATA') {
+    if (table === 'USERINFO' || table === 'USER') {
+      const users = parseUsers(body)
+      console.log(`[ADMS] USERINFO rows=${users.length} bytes=${Buffer.byteLength(body)}`)
+      await this.hooks.onUsers?.(sn, users)
       this.sendPlain(res, 'OK')
       return
     }
 
-    if (table === 'USERINFO') {
+    if (table === 'OPERLOG' || table === 'BIODATA') {
       const users = parseUsers(body)
-      this.hooks.onUsers?.(sn, users)
+      if (users.length) await this.hooks.onUsers?.(sn, users)
       this.sendPlain(res, 'OK')
       return
+    }
+
+    if (req.method === 'POST' && body && /(?:^|[\n\t])PIN=/i.test(body)) {
+      const users = parseUsers(body)
+      if (users.length) await this.hooks.onUsers?.(sn, users)
     }
 
     if (req.method === 'POST' && body) {
       const info = parseKv(body, '\n')
       const device = this.devices.get(sn)
       if (device) device.options = { ...device.options, ...info }
-      this.hooks.onDeviceInfo?.(sn, info)
+      await this.hooks.onDeviceInfo?.(sn, info)
     }
 
-    this.writeCommandsOrOk(res, sn)
+    await this.writeCommandsOrOk(res, sn)
   }
 
-  handleGetRequest(req, res) {
-    if (req.method !== 'GET') {
+  async handleGetRequest(req, res) {
+    if (req.method !== 'GET' && req.method !== 'POST') {
       res.status(405).send('Method not allowed')
       return
     }
     const sn = this.requireSn(req, res)
     if (!sn) return
-    this.writeCommandsOrOk(res, sn)
+    await this.touch(sn)
+    this.noteRequest(req)
+    await this.writeCommandsOrOk(res, sn)
   }
 
-  handleDeviceCmd(req, res) {
+  async handleDeviceCmd(req, res) {
     if (req.method !== 'POST') {
       res.status(405).send('Method not allowed')
       return
     }
     const sn = this.requireSn(req, res)
     if (!sn) return
+    await this.touch(sn)
+    this.noteRequest(req)
     const results = parseCommandResults(this.body(req), sn)
     for (const result of results) {
       result.queuedCommand = this.pending.get(result.id) || ''
@@ -390,21 +437,34 @@ class AdmsServer {
     this.sendPlain(res, 'OK')
   }
 
-  handleRegistry(req, res) {
+  async handleRegistry(req, res) {
     if (req.method !== 'GET' && req.method !== 'POST') {
       res.status(405).send('Method not allowed')
       return
     }
     const sn = this.requireSn(req, res)
     if (!sn) return
+    await this.touch(sn)
+    this.noteRequest(req)
     const body = this.body(req)
     if (body) {
       const info = parseKv(body, ',', (key) => key.replace(/^~/, ''))
       const device = this.devices.get(sn)
       if (device) device.options = { ...device.options, ...info }
-      this.hooks.onRegistry?.(sn, info)
+      await this.hooks.onRegistry?.(sn, info)
     }
     this.sendPlain(res, 'OK')
+  }
+
+  async handleUnknown(req, res) {
+    const sn = String(req.query.SN || req.query.sn || '').trim()
+    if (!sn || !SN_RE.test(sn)) {
+      res.status(404).send('Not found')
+      return
+    }
+    await this.touch(sn)
+    this.noteRequest(req)
+    await this.writeCommandsOrOk(res, sn)
   }
 
   handleInspect(req, res) {
@@ -412,6 +472,7 @@ class AdmsServer {
       devices: this.listDevices(),
       count: this.devices.size,
       time: new Date().toISOString(),
+      lastIclock: this.lastIclock,
     })
   }
 
