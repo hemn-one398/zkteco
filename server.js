@@ -181,4 +181,4 @@ if (!process.env.VERCEL) {
   main()
 }
 
-module.exports = { app, ready, hub }
+module.exports = app
