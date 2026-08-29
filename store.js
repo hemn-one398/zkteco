@@ -1,29 +1,61 @@
+const fs = require('fs')
+const path = require('path')
+const { Redis } = require('@upstash/redis')
+
 const KEY = 'zkteco:adms:v1'
 
-function redisCreds() {
-  const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN
-  if (!url || !token) return null
-  return { url: url.replace(/\/$/, ''), token }
+function loadEnvFile(file) {
+  const full = path.join(__dirname, file)
+  if (!fs.existsSync(full)) return
+  for (const line of fs.readFileSync(full, 'utf8').split('\n')) {
+    const text = line.trim()
+    if (!text || text.startsWith('#')) continue
+    const eq = text.indexOf('=')
+    if (eq < 0) continue
+    const key = text.slice(0, eq).trim()
+    let value = text.slice(eq + 1).trim()
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1)
+    }
+    if (process.env[key] == null) process.env[key] = value
+  }
+}
+
+loadEnvFile('.env.development.local')
+loadEnvFile('.env')
+
+function getRedis() {
+  try {
+    if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+      return Redis.fromEnv()
+    }
+    if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
+      return new Redis({
+        url: process.env.KV_REST_API_URL,
+        token: process.env.KV_REST_API_TOKEN,
+      })
+    }
+  } catch (err) {
+    console.error('redis init failed:', err.message || err)
+  }
+  return null
 }
 
 function persistBackend() {
-  if (redisCreds()) return 'redis'
+  if (getRedis()) return 'redis'
   if (process.env.VERCEL) return 'memory'
   return 'local'
 }
 
 async function loadState() {
-  const creds = redisCreds()
-  if (!creds) return globalThis.__zktecoAdms || null
+  const redis = getRedis()
+  if (!redis) return globalThis.__zktecoAdms || null
   try {
-    const res = await fetch(`${creds.url}/get/${encodeURIComponent(KEY)}`, {
-      headers: { Authorization: `Bearer ${creds.token}` },
-      signal: AbortSignal.timeout(4000),
-    })
-    const data = await res.json()
-    if (!data.result) return globalThis.__zktecoAdms || null
-    const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result
+    const parsed = await redis.get(KEY)
+    if (!parsed) return globalThis.__zktecoAdms || null
     globalThis.__zktecoAdms = parsed
     return parsed
   } catch (err) {
@@ -34,19 +66,10 @@ async function loadState() {
 
 async function saveState(value) {
   globalThis.__zktecoAdms = value
-  const creds = redisCreds()
-  if (!creds) return persistBackend()
+  const redis = getRedis()
+  if (!redis) return persistBackend()
   try {
-    const res = await fetch(creds.url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${creds.token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(['SET', KEY, JSON.stringify(value)]),
-      signal: AbortSignal.timeout(4000),
-    })
-    if (!res.ok) throw new Error(`redis HTTP ${res.status}`)
+    await redis.set(KEY, value)
   } catch (err) {
     console.error('adms store save failed:', err.message || err)
   }

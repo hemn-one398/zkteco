@@ -13,6 +13,7 @@
     "watch": "node demo.js --watch"
   },
   "dependencies": {
+    "@upstash/redis": "^1.38.3",
     "express": "^5.1.0",
     "node-zklib": "^1.3.0"
   }
