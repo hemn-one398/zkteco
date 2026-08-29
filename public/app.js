@@ -90,8 +90,8 @@ function render(state) {
           <td>${roleLabel(user.role)}</td>
           <td>
             <div class="row-actions">
-              <button type="button" class="link" data-edit-uid="${escapeHtml(user.uid)}">Edit</button>
-              <button type="button" class="link danger" data-del="${escapeHtml(user.uid)}" data-name="${escapeHtml(user.name)}">Delete</button>
+              <button type="button" class="ghost" data-edit-uid="${escapeHtml(user.uid)}">Edit</button>
+              <button type="button" class="row-del" data-del="${escapeHtml(user.userId)}" data-uid="${escapeHtml(user.uid)}" data-name="${escapeHtml(user.name)}">Delete</button>
             </div>
           </td>
         </tr>`,
@@ -221,10 +221,17 @@ $('users-body').addEventListener('click', (event) => {
   }
   const del = event.target.closest('[data-del]')
   if (!del) return
-  const name = del.getAttribute('data-name')
+  const name = del.getAttribute('data-name') || 'this person'
   if (!confirm(`Delete ${name} from the device? Face / fingerprint data for this person is also removed.`)) return
   del.disabled = true
-  api(`/api/users/${del.getAttribute('data-del')}`, { method: 'DELETE' })
+  api('/api/users/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: del.getAttribute('data-del'),
+      uid: del.getAttribute('data-uid'),
+    }),
+  })
     .then((state) =>
       showBanner(
         state.mode === 'adms' ? `${name} delete queued — waiting for the device to poll` : `${name} deleted`,

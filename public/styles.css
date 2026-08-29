@@ -147,8 +147,26 @@ h2 {
 
 .row-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   justify-content: flex-end;
+}
+
+button.row-del {
+  background: transparent;
+  color: var(--off);
+  border: 1px solid var(--off);
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+button.row-del:hover {
+  background: var(--off);
+  color: #fff;
+}
+
+.row-actions .ghost {
+  padding: 4px 10px;
+  font-size: 12px;
 }
 
 .pill,

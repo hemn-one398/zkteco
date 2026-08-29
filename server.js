@@ -126,6 +126,15 @@ app.post('/api/users', async (req, res) => {
   }
 })
 
+app.post('/api/users/delete', async (req, res) => {
+  try {
+    const id = req.body?.userId || req.body?.uid
+    res.json(await hub.deleteUser(id, req))
+  } catch (err) {
+    fail(res, err, 400)
+  }
+})
+
 app.delete('/api/users/:uid', async (req, res) => {
   try {
     res.json(await hub.deleteUser(req.params.uid, req))
