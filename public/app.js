@@ -14,6 +14,18 @@ function roleLabel(role) {
   return Number(role) === 14 ? 'Admin' : 'User'
 }
 
+function personName(log, users) {
+  const id = String(log?.userId ?? '').trim()
+  const user = (users || []).find(
+    (item) => String(item.userId) === id || String(item.uid) === id,
+  )
+  const fromUser = String(user?.name || '').trim()
+  if (fromUser && !/^User\s+/i.test(fromUser)) return fromUser
+  const fromLog = String(log?.name || '').trim()
+  if (fromLog && !/^User\s+/i.test(fromLog)) return fromLog
+  return fromUser || fromLog || id || '—'
+}
+
 let lastUsers = []
 
 function showBanner(text, ok = false) {
@@ -58,16 +70,16 @@ function render(state) {
   $('stat-logs').textContent = state.info?.logCounts ?? state.logs?.length ?? '—'
   $('stat-capacity').textContent = state.info?.logCapacity ?? '—'
 
+  const users = state.users || []
+  lastUsers = users
   const last = (state.logs || [])[0]
-  $('stat-last').textContent = last ? last.name : 'No punches yet'
+  $('stat-last').textContent = last ? personName(last, users) : 'No punches yet'
   $('stat-last-sub').textContent = last ? formatTime(last.time) : ''
 
   if (state.error) showBanner(state.error)
   else if (!$('banner').classList.contains('ok')) showBanner('')
 
   const usersBody = $('users-body')
-  const users = state.users || []
-  lastUsers = users
   usersBody.innerHTML = users.length
     ? users
         .map(
@@ -95,7 +107,7 @@ function render(state) {
           (log) => `
         <tr class="${log.live ? 'live' : ''}">
           <td>${escapeHtml(formatTime(log.time))}</td>
-          <td>${escapeHtml(log.name)}</td>
+          <td>${escapeHtml(personName(log, users))}</td>
           <td>${escapeHtml(log.userId)}</td>
         </tr>`,
         )

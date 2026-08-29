@@ -227,8 +227,14 @@ class Device extends EventEmitter {
   }
 
   nameFor(userId) {
-    const user = this.users.find((item) => item.userId === String(userId))
-    return user?.name || `User ${userId}`
+    const id = String(userId ?? '').trim()
+    if (!id) return ''
+    const user = this.users.find(
+      (item) => String(item.userId) === id || String(item.uid) === id,
+    )
+    const name = String(user?.name || '').trim()
+    if (name && !/^User\s+/i.test(name)) return name
+    return name || `User ${id}`
   }
 
   nextUid() {

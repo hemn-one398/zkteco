@@ -76,8 +76,21 @@ class AdmsDevice extends EventEmitter {
   }
 
   nameFor(userId) {
-    const user = this.users.find((item) => item.userId === String(userId))
-    return user?.name || `User ${userId}`
+    const id = String(userId ?? '').trim()
+    if (!id) return ''
+    const user = this.users.find(
+      (item) => String(item.userId) === id || String(item.uid) === id,
+    )
+    const name = String(user?.name || '').trim()
+    if (name && !/^User\s+/i.test(name)) return name
+    return name || `User ${id}`
+  }
+
+  withNames(logs) {
+    return (logs || []).map((log) => ({
+      ...log,
+      name: this.nameFor(log.userId) || log.name || '',
+    }))
   }
 
   ingestInfo(sn, info) {
@@ -105,6 +118,7 @@ class AdmsDevice extends EventEmitter {
     this.info.userCounts = this.users.length
     this.lastSync = new Date().toISOString()
     this.error = null
+    this.logs = this.withNames(this.logs)
     this.emit('status', this.getState())
   }
 
@@ -149,7 +163,7 @@ class AdmsDevice extends EventEmitter {
         logCapacity: this.info.logCapacity || 0,
       },
       users: this.users,
-      logs: this.logs,
+      logs: this.withNames(this.logs),
       admsDevices: listed,
       pendingCommands: sn ? this.server.pendingCount(sn) : 0,
       persist: persistBackend(),
