@@ -234,6 +234,15 @@ class AdmsDevice extends EventEmitter {
     return this.getState()
   }
 
+  async fetchUsers() {
+    const sn = this.requireSn()
+    this.server.sendQueryUsers(sn)
+    this.lastSync = new Date().toISOString()
+    this.error = null
+    this.emit('status', this.getState())
+    return this.getState()
+  }
+
   async setUser(input = {}) {
     const sn = this.requireSn()
     const name = String(input.name || '').trim()

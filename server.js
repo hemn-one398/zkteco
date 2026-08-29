@@ -118,6 +118,14 @@ app.post('/api/refresh', async (req, res) => {
   }
 })
 
+app.post('/api/users/fetch', async (req, res) => {
+  try {
+    res.json(await hub.fetchUsers(req))
+  } catch (err) {
+    fail(res, err)
+  }
+})
+
 app.post('/api/users', async (req, res) => {
   try {
     res.json(await hub.setUser(req.body || {}, req))

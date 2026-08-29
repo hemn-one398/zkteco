@@ -110,6 +110,14 @@ h2 {
   padding-right: 18px;
 }
 
+.panel-note {
+  margin: 0;
+  padding: 0 18px 8px;
+  color: var(--muted);
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 13px;
+}
+
 .user-form {
   display: grid;
   grid-template-columns: 1fr 1fr;

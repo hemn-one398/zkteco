@@ -226,6 +226,29 @@ class Device extends EventEmitter {
       })
   }
 
+  async fetchUsers() {
+    return this.enqueue(async () => {
+      if (!this.connected) await this.connect()
+      const usersRes = await this.zk.getUsers()
+      this.users = (usersRes?.data || []).map((user) => ({
+        uid: user.uid,
+        userId: String(user.userId ?? user.uid ?? ''),
+        name: (user.name || '').trim() || `User ${user.userId}`,
+        role: user.role,
+        card: user.cardno ? String(user.cardno) : '',
+      }))
+      this.info.userCounts = this.users.length
+      this.lastSync = new Date().toISOString()
+      this.error = null
+      this.emit('status', this.getState())
+      return this.getState()
+    }).catch((err) => {
+      this.error = errMessage(err)
+      this.emit('status', this.getState())
+      throw err
+    })
+  }
+
   nameFor(userId) {
     const id = String(userId ?? '').trim()
     if (!id) return ''

@@ -173,6 +173,24 @@ $('mode-switch').addEventListener('click', (event) => {
   }).catch((err) => showBanner(err.message))
 })
 
+$('fetch-users').addEventListener('click', () => {
+  const button = $('fetch-users')
+  button.disabled = true
+  api('/api/users/fetch', { method: 'POST' })
+    .then((state) =>
+      showBanner(
+        state.mode === 'adms'
+          ? 'Fetch queued — waiting for the device to send its user list'
+          : `Loaded ${state.users?.length || 0} users from the device`,
+        true,
+      ),
+    )
+    .catch((err) => showBanner(err.message))
+    .finally(() => {
+      button.disabled = false
+    })
+})
+
 $('refresh').addEventListener('click', () => {
   $('refresh').disabled = true
   api('/api/refresh', { method: 'POST' })

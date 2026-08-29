@@ -222,6 +222,11 @@ class Hub extends EventEmitter {
     return this.getState(req)
   }
 
+  async fetchUsers(req) {
+    await this.active.fetchUsers()
+    return this.getState(req)
+  }
+
   async setUser(input, req) {
     await this.active.setUser(input)
     return this.getState(req)
