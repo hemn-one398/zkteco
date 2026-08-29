@@ -1,5 +1,6 @@
 const { EventEmitter } = require('events')
 const { AdmsServer } = require('./adms')
+const { loadState, saveState, persistBackend } = require('./store')
 
 function punchKey(userId, time) {
   return `${userId}|${time}`
@@ -44,6 +45,34 @@ class AdmsDevice extends EventEmitter {
 
   get router() {
     return this.server.router
+  }
+
+  async hydrate() {
+    const data = await loadState()
+    if (!data) return
+    this.server.restore(data.server || {})
+    this.users = data.users || []
+    this.logs = data.logs || []
+    this.seen = new Set(data.seen || [])
+    this.info = data.info || this.info
+    this.serial = data.serial || this.serial
+    this.options = data.options || {}
+    this.lastSync = data.lastSync || null
+    this.error = data.error || null
+  }
+
+  async persist() {
+    await saveState({
+      server: this.server.snapshot(),
+      users: this.users,
+      logs: this.logs,
+      seen: [...this.seen],
+      info: this.info,
+      serial: this.serial,
+      options: this.options,
+      lastSync: this.lastSync,
+      error: this.error,
+    })
   }
 
   nameFor(userId) {
@@ -123,6 +152,7 @@ class AdmsDevice extends EventEmitter {
       logs: this.logs,
       admsDevices: listed,
       pendingCommands: sn ? this.server.pendingCount(sn) : 0,
+      persist: persistBackend(),
     }
   }
 

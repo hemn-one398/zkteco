@@ -111,16 +111,31 @@ class Hub extends EventEmitter {
   }
 
   resolveAdms(req) {
+    if (process.env.VERCEL) {
+      const host =
+        hostnameFromHostHeader(this.config.admsHost) ||
+        hostnameFromHostHeader(process.env.VERCEL_PROJECT_PRODUCTION_URL) ||
+        hostnameFromHostHeader(process.env.VERCEL_URL) ||
+        'zhemmo.vercel.app'
+      return {
+        host,
+        port: 443,
+        https: true,
+        domainName: true,
+        url: `https://${host}/iclock/`,
+      }
+    }
+
     const configured = hostnameFromHostHeader(this.config.admsHost)
     const fromReq = requestHost(req)
     if (fromReq && !isUnreachableHost(fromReq)) this.lastAdmsHost = fromReq
 
     const host =
       (configured && !isUnreachableHost(configured) && configured) ||
+      lanIPv4() ||
       this.lastAdmsHost ||
       (fromReq && !isUnreachableHost(fromReq) && fromReq) ||
       envPublicHost() ||
-      lanIPv4() ||
       '127.0.0.1'
 
     const https = requestProto(req, host) === 'https'
@@ -160,7 +175,17 @@ class Hub extends EventEmitter {
     }
   }
 
+  async hydrate() {
+    await this.adms.hydrate()
+  }
+
+  async persist() {
+    await this.adms.persist()
+  }
+
   async start() {
+    if (process.env.VERCEL) this.mode = 'adms'
+    await this.hydrate()
     if (this.mode === 'sdk') {
       await this.sdk.start()
     } else {
@@ -169,6 +194,10 @@ class Hub extends EventEmitter {
   }
 
   async setMode(mode, req) {
+    if (process.env.VERCEL) {
+      this.mode = 'adms'
+      return this.getState(req)
+    }
     const next = mode === 'adms' ? 'adms' : 'sdk'
     if (next === this.mode) return this.getState(req)
     if (this.mode === 'sdk') {

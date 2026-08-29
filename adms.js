@@ -174,6 +174,38 @@ class AdmsServer {
     if (isNew) this.hooks.onFirstSeen?.(sn)
   }
 
+  snapshot() {
+    return {
+      devices: [...this.devices.entries()].map(([sn, device]) => [
+        sn,
+        {
+          serialNumber: device.serialNumber,
+          options: device.options || {},
+          lastActivity: device.lastActivity ? device.lastActivity.toISOString() : null,
+        },
+      ]),
+      queues: [...this.queues.entries()],
+      pending: [...this.pending.entries()],
+      nextId: this.nextId,
+    }
+  }
+
+  restore(data = {}) {
+    this.devices = new Map(
+      (data.devices || []).map(([sn, device]) => [
+        sn,
+        {
+          serialNumber: device.serialNumber || sn,
+          options: device.options || {},
+          lastActivity: device.lastActivity ? new Date(device.lastActivity) : null,
+        },
+      ]),
+    )
+    this.queues = new Map(data.queues || [])
+    this.pending = new Map((data.pending || []).map(([id, command]) => [Number(id) || id, command]))
+    this.nextId = Number(data.nextId) || 1
+  }
+
   pendingCount(sn) {
     const queued = (this.queues.get(sn) || []).length
     let pending = 0

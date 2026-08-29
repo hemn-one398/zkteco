@@ -1,11 +1,12 @@
 const path = require('path')
 const express = require('express')
 const { Hub } = require('./hub')
+const { persistBackend } = require('./store')
 
 const PORT = Number(process.env.PORT || 3005)
 
 const hub = new Hub({
-  mode: process.env.ZK_MODE || 'sdk',
+  mode: process.env.ZK_MODE || (process.env.VERCEL ? 'adms' : 'sdk'),
   httpPort: PORT,
   admsHost: process.env.ZK_ADMS_HOST || '',
   ip: process.env.ZK_IP || '192.168.1.76',
@@ -50,12 +51,46 @@ app.use((req, res, next) => {
   next()
 })
 
+app.use(async (req, res, next) => {
+  try {
+    await hub.hydrate()
+  } catch (err) {
+    console.error('hydrate failed:', err.message || err)
+  }
+  const mutating =
+    (req.path.startsWith('/iclock') && !req.path.startsWith('/iclock/inspect')) ||
+    (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS')
+  if (!mutating) {
+    next()
+    return
+  }
+  const end = res.end.bind(res)
+  let flushed = false
+  res.end = (...args) => {
+    if (flushed) {
+      end(...args)
+      return
+    }
+    flushed = true
+    Promise.resolve(hub.persist())
+      .catch((err) => console.error('persist failed:', err.message || err))
+      .finally(() => end(...args))
+  }
+  next()
+})
+
 app.use('/iclock', hub.adms.router)
 app.use(express.json())
 app.use(express.static(path.join(__dirname, 'public')))
 
 app.get('/api/status', (req, res) => {
-  res.json(hub.getState(req))
+  const state = hub.getState(req)
+  if (process.env.VERCEL && persistBackend() === 'memory') {
+    state.error =
+      state.error ||
+      'Add Upstash Redis on Vercel (UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN) so the device and dashboard share ADMS state.'
+  }
+  res.json(state)
 })
 
 app.post('/api/mode', async (req, res) => {
@@ -117,7 +152,12 @@ process.on('uncaughtException', (err) => {
   console.error('uncaughtException:', err?.message || err)
 })
 
+const ready = hub.start().catch((err) => {
+  console.error('Could not start device mode:', err?.err?.message || err.message || err)
+})
+
 async function main() {
+  await ready
   const host = process.env.HOST || '0.0.0.0'
   const server = app.listen(PORT, host, () => {
     console.log(`Dashboard: http://localhost:${PORT}`)
@@ -127,16 +167,10 @@ async function main() {
     console.error('Could not start web server:', err.message)
     process.exit(1)
   })
-
-  try {
-    await hub.start()
-    const state = hub.getState()
-    console.log(
-      `Mode ${state.mode}: ${state.users.length} users, ${state.logs.length} logs`,
-    )
-  } catch (err) {
-    console.error('Could not start device mode:', err?.err?.message || err.message || err)
-  }
 }
 
-main()
+if (!process.env.VERCEL) {
+  main()
+}
+
+module.exports = { app, ready, hub }
