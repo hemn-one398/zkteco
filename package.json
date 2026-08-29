@@ -5,7 +5,7 @@
   "description": "Demo: connect a ZKTeco iFace 990 Plus to Node.js with node-zklib",
   "main": "server.js",
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   },
   "scripts": {
     "start": "node server.js",
