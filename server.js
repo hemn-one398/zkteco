@@ -36,6 +36,14 @@ function fail(res, err, status = 503) {
 
 const app = express()
 app.disable('x-powered-by')
+app.use(async (_req, _res, next) => {
+  try {
+    await ready
+  } catch (err) {
+    console.error('hub start failed:', err.message || err)
+  }
+  next()
+})
 app.use((req, res, next) => {
   if (req.path.startsWith('/iclock')) {
     next()

@@ -1,6 +1,5 @@
 const { EventEmitter } = require('events')
 const os = require('os')
-const { Device } = require('./device')
 const { AdmsDevice } = require('./adms-device')
 
 const SKIP_IFACE = /^(lo|awdl|llw|bridge|utun|tun|tap|veth|docker|br-|cni|flannel|virbr|vboxnet|vmnet|vnic)/i
@@ -90,10 +89,10 @@ class Hub extends EventEmitter {
     this.config = config
     this.mode = config.mode === 'adms' ? 'adms' : 'sdk'
     this.port = config.httpPort
-    this.sdk = new Device(config)
+    this.sdk = process.env.VERCEL ? null : new (require('./device').Device)(config)
     this.adms = new AdmsDevice()
     this.lastAdmsHost = ''
-    this.bind(this.sdk)
+    if (this.sdk) this.bind(this.sdk)
     this.bind(this.adms)
   }
 

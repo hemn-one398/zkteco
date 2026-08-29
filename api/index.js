@@ -1,6 +1,3 @@
-const { app, ready } = require('../server')
+const { app } = require('../server')
 
-module.exports = async (req, res) => {
-  await ready
-  return app(req, res)
-}
+module.exports = app
